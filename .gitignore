@@ -1,0 +1,32 @@
+# Build results
+[Bb]in/
+[Oo]bj/
+*.user
+*.pdb
+
+# Archives and Packages
+*.zip
+*.tar
+*.gz
+*.apworld
+
+# Logs and Saves
+*.log
+*.apsave
+*.json.bak
+
+# Staging & Release folders
+staging_release/
+Release/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDEs
+.vs/
+.vscode/
+.idea/
+*.suo
+*.useros
