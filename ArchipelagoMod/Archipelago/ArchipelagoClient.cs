@@ -28,6 +28,25 @@ namespace WordPlayArchipelago.Archipelago
         // Global Run State
         public static bool IsArchipelagoRun { get; set; } = false;
 
+        public static int LastProcessedItemIndex { get; private set; } = 0;
+
+        public class PendingIncomingItem
+        {
+            public int ItemIndex;
+            public long ItemId;
+            public string ItemName = "";
+        }
+
+        private static readonly Queue<PendingIncomingItem> _pendingGameItems = new Queue<PendingIncomingItem>();
+
+        public string SeedName { get; private set; } = "";
+
+        private string GetItemIndexPrefKey()
+        {
+            string seed = !string.IsNullOrEmpty(SeedName) ? SeedName : "UnknownSeed";
+            return $"AP_LastItemIndex_{seed}_{SlotName}";
+        }
+
         public bool IsLocationChecked(long locationId) => _checkedLocations.Contains(locationId);
 
         public event Action? OnConnectionStatusChanged;
@@ -73,13 +92,14 @@ namespace WordPlayArchipelago.Archipelago
                 var session = ArchipelagoSessionFactory.CreateSession(new Uri($"ws://{host}:{port}"));
 
                 var roomInfo = await session.ConnectAsync();
-                Plugin.Logger.LogInfo($"[ArchipelagoClient] WebSocket connected! Server reports version: {roomInfo.Version}. Logging in as '{slotName}'...");
+                SeedName = roomInfo.SeedName ?? "";
+                Plugin.Logger.LogInfo($"[ArchipelagoClient] WebSocket connected! Server reports version: {roomInfo.Version}, SeedName: {SeedName}. Logging in as '{slotName}'...");
 
                 LoginResult result = await session.LoginAsync(
                     "Word Play",
                     slotName,
                     ItemsHandlingFlags.AllItems,
-                    new Version(0, 5, 0),
+                    new Version(0, 6, 8),
                     tags: Plugin.Instance.EnableDeathLink.Value ? new[] { "DeathLink" } : Array.Empty<string>(),
                     uuid: null,
                     password: password,
@@ -181,7 +201,12 @@ namespace WordPlayArchipelago.Archipelago
 
                     Plugin.Logger.LogInfo($"[ArchipelagoClient] Settings: Difficulty={Difficulty.ToUpper()} ({TotalRoundsForDifficulty} rounds), Wins Required={WinsRequired}, Starting Word Length={ItemManager.StartingWordLength}, LockMods={UnlockManager.LockModifiers}, LockTileChanges={UnlockManager.LockTileChanges}, LockTileAdditions={UnlockManager.LockTileAdditions}. Starting unlocked perks: {UnlockManager.UnlockedBonuses.Count}");
 
-                    ItemManager.ResetRunState();
+                    string prefKey = GetItemIndexPrefKey();
+                    LastProcessedItemIndex = PlayerPrefs.GetInt(prefKey, 0);
+                    Plugin.Logger.LogInfo($"[ArchipelagoClient] Loaded LastProcessedItemIndex = {LastProcessedItemIndex} for {prefKey}");
+
+                    ItemManager.ResetAllState();
+                    _pendingGameItems.Clear();
 
                     SlotNumber = successful.Slot;
 
@@ -191,14 +216,11 @@ namespace WordPlayArchipelago.Archipelago
                     // Immediately process any items already in the queue from server
                     while (session.Items.Any())
                     {
+                        int itemIndex = session.Items.Index;
                         ItemInfo initialItem = session.Items.DequeueItem();
                         long itemId = initialItem.ItemId;
                         string itemName = initialItem.ItemDisplayName;
-                        Plugin.Logger.LogInfo($"[ArchipelagoClient] Dequeued initial received item: {itemName} (ID: {itemId})");
-                        EnqueueMainThreadAction(() =>
-                        {
-                            ItemManager.HandleReceivedItem(itemId, itemName);
-                        });
+                        HandleIncomingItem(itemIndex, itemId, itemName);
                     }
 
                     // Re-sync any previously acquired locations
@@ -342,15 +364,80 @@ namespace WordPlayArchipelago.Archipelago
             Plugin.Logger.LogInfo($"[ArchipelagoClient] OnItemReceived callback triggered by server!");
             while (helper.Any())
             {
+                int itemIndex = helper.Index;
                 ItemInfo item = helper.DequeueItem();
                 long itemId = item.ItemId;
                 string itemName = item.ItemDisplayName;
 
-                Plugin.Logger.LogInfo($"[ArchipelagoClient] Dequeued incoming item: {itemName} (ID: {itemId})");
+                HandleIncomingItem(itemIndex, itemId, itemName);
+            }
+        }
+
+        private void HandleIncomingItem(int itemIndex, long itemId, string itemName)
+        {
+            Plugin.Logger.LogInfo($"[ArchipelagoClient] Incoming item: #{itemIndex} '{itemName}' (ID: {itemId}), LastProcessed={LastProcessedItemIndex}");
+
+            if (itemIndex < LastProcessedItemIndex)
+            {
+                // This item was already received and processed in a prior session / run!
+                // Re-apply permanent progression silently so character stats are restored,
+                // but DO NOT show banners, DO NOT trigger traps, DO NOT re-grant consumables!
                 EnqueueMainThreadAction(() =>
                 {
-                    ItemManager.HandleReceivedItem(itemId, itemName);
+                    ItemManager.HandleReceivedItem(itemId, itemName, silentReplay: true);
                 });
+                return;
+            }
+
+            // This is a NEW item waiting on the server!
+            EnqueueMainThreadAction(() =>
+            {
+                // If we are currently actively playing the game, execute immediately:
+                if (IsArchipelagoRun && UnityEngine.SceneManagement.SceneManager.GetActiveScene().name == "Game")
+                {
+                    ExecuteNewItem(itemIndex, itemId, itemName);
+                }
+                else
+                {
+                    // Otherwise, we are in the lobby/menu!
+                    // If it is a permanent perk unlock, register it with UnlockManager so shop/rules know about it,
+                    // but do NOT show banners or trigger traps/consumables until game starts.
+                    if (itemId >= 92000 && itemId <= 94017)
+                    {
+                        UnlockManager.RegisterUnlock(itemId);
+                    }
+
+                    // Queue for execution once the game starts!
+                    _pendingGameItems.Enqueue(new PendingIncomingItem
+                    {
+                        ItemIndex = itemIndex,
+                        ItemId = itemId,
+                        ItemName = itemName
+                    });
+                    Plugin.Logger.LogInfo($"[ArchipelagoClient] Queued item #{itemIndex} '{itemName}' until game start.");
+                }
+            });
+        }
+
+        private void ExecuteNewItem(int itemIndex, long itemId, string itemName)
+        {
+            ItemManager.HandleReceivedItem(itemId, itemName, silentReplay: false);
+            if (itemIndex >= LastProcessedItemIndex)
+            {
+                LastProcessedItemIndex = itemIndex + 1;
+                string prefKey = GetItemIndexPrefKey();
+                PlayerPrefs.SetInt(prefKey, LastProcessedItemIndex);
+                PlayerPrefs.Save();
+                Plugin.Logger.LogInfo($"[ArchipelagoClient] Saved LastProcessedItemIndex = {LastProcessedItemIndex}");
+            }
+        }
+
+        public void ProcessPendingGameItems()
+        {
+            while (_pendingGameItems.Count > 0)
+            {
+                var pending = _pendingGameItems.Dequeue();
+                ExecuteNewItem(pending.ItemIndex, pending.ItemId, pending.ItemName);
             }
         }
 
@@ -371,6 +458,11 @@ namespace WordPlayArchipelago.Archipelago
                 {
                     Plugin.Logger.LogError($"Error executing main thread action: {ex}");
                 }
+            }
+
+            if (IsArchipelagoRun && UnityEngine.SceneManagement.SceneManager.GetActiveScene().name == "Game")
+            {
+                ProcessPendingGameItems();
             }
         }
     }

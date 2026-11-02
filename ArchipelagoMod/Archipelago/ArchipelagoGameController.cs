@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Archipelago.MultiClient.Net.Enums;
+using DG.Tweening;
 using HarmonyLib;
 using TMPro;
 using UnityEngine;
@@ -73,18 +74,38 @@ namespace WordPlayArchipelago.Archipelago
         {
             int allowed = ItemManager.UnlockedWordLength;
 
-            if (LogicManagerScript.Instance != null && LogicManagerScript.Instance.allowedNumberOfLetters != allowed)
-            {
-                LogicManagerScript.Instance.allowedNumberOfLetters = allowed;
-            }
-
             if (SubmissionScript.Instance != null)
             {
                 if (SubmissionScript.Instance.longestAllowedWord != allowed)
                 {
                     SubmissionScript.Instance.longestAllowedWord = allowed;
-                    SubmissionScript.Instance.RestrictSubmissionBoxes(allowed);
+                    ItemManager.ApplyWordLengthRestriction();
                     Plugin.Logger.LogInfo($"[ArchipelagoGameController] Clamped submission boxes to {allowed} letters.");
+                }
+
+                if (allowed > 10 && SubmissionScript.Instance.numberOfFilledTiles >= 10 && !SubmissionScript.Instance.ElevenPlusShowing)
+                {
+                    SubmissionScript.Instance.ShowAllSubmissionHolders();
+                }
+
+                if (SubmissionScript.Instance.tileHolderScripts != null)
+                {
+                    for (int j = allowed; j < 20 && j < SubmissionScript.Instance.tileHolderScripts.Count; j++)
+                    {
+                        var holder = SubmissionScript.Instance.tileHolderScripts[j];
+                        if (holder != null && holder.gameObject.activeSelf)
+                        {
+                            DOTween.Kill(holder);
+                            holder.transform.DOKill();
+                            var cg = holder.GetComponent<CanvasGroup>();
+                            if (cg != null)
+                            {
+                                DOTween.Kill(cg);
+                                cg.alpha = 0f;
+                            }
+                            holder.gameObject.SetActive(false);
+                        }
+                    }
                 }
 
                 // If user somehow manages to put more than allowed tiles in submission

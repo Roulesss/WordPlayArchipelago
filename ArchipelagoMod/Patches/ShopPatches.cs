@@ -26,11 +26,12 @@ namespace WordPlayArchipelago.Patches
                 locationId = LocationManager.GetShopPurchaseLocationId(round, cardID);
             }
 
-            string desc = $"Shop Choice #{cardID + 1}";
+            string locTitle = LocationManager.IsShopLocation(locationId) ? "Round Shop Choice" : (LocationManager.GetLocationName(locationId) ?? "Round Shop Choice");
+            string desc = locTitle;
             if (client.ScoutedLocations.TryGetValue(locationId, out var scouted))
             {
                 string recipient = scouted.Player.Slot == client.SlotNumber ? "You" : scouted.Player.Name;
-                desc = $"{scouted.LocationDisplayName}: {scouted.ItemDisplayName} ({recipient})";
+                desc = $"{locTitle}: {scouted.ItemDisplayName} ({recipient})";
             }
             else
             {
@@ -38,7 +39,7 @@ namespace WordPlayArchipelago.Patches
                 if (!string.IsNullOrEmpty(locName)) desc = locName!;
             }
 
-            Plugin.Logger?.LogInfo($"Player purchased Shop Card #{cardID + 1} on Round {round}! Checking Location #{locationId} ({desc})...");
+            Plugin.Logger?.LogInfo($"Player purchased Round Shop Choice on Round {round}! Checking Location #{locationId} ({desc})...");
             client.CheckLocation(locationId, desc);
         }
     }
@@ -291,7 +292,7 @@ namespace WordPlayArchipelago.Patches
                 var headerField = Traverse.Create(card).Field("headerText").GetValue<TMP_Text>();
                 if (headerField != null)
                 {
-                    headerField.text = isChecked ? "[CHECKED] AP Check" : $"[AP #{cardIdx + 1}] AP Check";
+                    headerField.text = isChecked ? "[CHECKED] AP Check" : "[AP] AP Check";
                 }
 
                 var mainHeader = Traverse.Create(card).Field("mainHeaderColour").GetValue<Image>();
@@ -376,8 +377,8 @@ namespace WordPlayArchipelago.Patches
                     }
                     else
                     {
-                        string locName = LocationManager.GetLocationName(locationId) ?? $"Shop Check #{cardIdx + 1}";
-                        descField.text = $"<size=120%><color=#00FFFF><b>Archipelago Item #{cardIdx + 1}</b></color></size>\n\n<size=85%>{locName}</size>\n\n<size=75%><color=#AAAAAA>Choose to check this location</color></size>";
+                        string locName = LocationManager.IsShopLocation(locationId) ? "Round Shop Choice" : (LocationManager.GetLocationName(locationId) ?? "Round Shop Choice");
+                        descField.text = $"<size=120%><color=#00FFFF><b>Archipelago Item</b></color></size>\n\n<size=85%>{locName}</size>\n\n<size=75%><color=#AAAAAA>Choose to check this location</color></size>";
                     }
                 }
 
@@ -414,7 +415,7 @@ namespace WordPlayArchipelago.Patches
 
                 if (headerField != null)
                 {
-                    headerField.text = isChecked ? $"[CHECKED] {vanillaHeader}" : $"[AP #{cardIdx + 1}] {vanillaHeader}";
+                    headerField.text = isChecked ? $"[CHECKED] {vanillaHeader}" : $"[AP] {vanillaHeader}";
                 }
 
                 var descField = Traverse.Create(card).Field("myDescription").GetValue<TMP_Text>();

@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using HarmonyLib;
+using TMPro;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace WordPlayArchipelago.Archipelago
 {
@@ -20,6 +23,103 @@ namespace WordPlayArchipelago.Archipelago
         // Active trap states
         public static int BadSlotIndex { get; set; } = -1; // -1 means none active
         public static bool VowelsScoreZeroActive { get; set; }
+
+        public static void RefreshAllTileVisuals()
+        {
+            try
+            {
+                var tiles = UnityEngine.Object.FindObjectsOfType<TileScript>();
+                foreach (var tile in tiles)
+                {
+                    if (tile != null)
+                    {
+                        tile.UpdateScoreText();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Logger?.LogWarning($"[TrapsManager] RefreshAllTileVisuals error: {ex.Message}");
+            }
+        }
+
+        public static void UpdateBadSlotVisuals()
+        {
+            try
+            {
+                if (SubmissionScript.Instance == null || SubmissionScript.Instance.tileHolderScripts == null) return;
+
+                int bad = BadSlotIndex;
+                for (int i = 0; i < SubmissionScript.Instance.tileHolderScripts.Count && i < 20; i++)
+                {
+                    var holder = SubmissionScript.Instance.tileHolderScripts[i];
+                    if (holder == null) continue;
+
+                    var bg = Traverse.Create(holder).Field("holderBGImage").GetValue<Image>();
+                    var numShadow = Traverse.Create(holder).Field("submissionNumberShadow").GetValue<TMP_Text>();
+
+                    if (bad >= 0 && i == bad)
+                    {
+                        if (bg != null) bg.color = new Color(0.85f, 0.15f, 0.15f, 0.85f);
+                        if (numShadow != null)
+                        {
+                            numShadow.text = "0";
+                            numShadow.color = Color.red;
+                        }
+                    }
+                    else
+                    {
+                        int req = 4;
+                        try
+                        {
+                            req = Traverse.Create(SubmissionScript.Instance).Field("numberOfTilesRequired").GetValue<int>();
+                            if (req <= 0) req = 4;
+                        }
+                        catch { }
+
+                        holder.SetColour(i < req);
+                        holder.UpdateLongWordBonus();
+                        holder.UpdateLongWordBonusColor();
+                    }
+
+                    if (SubmissionScript.Instance.submittingTiles != null &&
+                        i < SubmissionScript.Instance.submittingTiles.Count &&
+                        SubmissionScript.Instance.submittingTiles[i] != null)
+                    {
+                        SubmissionScript.Instance.submittingTiles[i].UpdateScoreText();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Logger?.LogWarning($"[TrapsManager] UpdateBadSlotVisuals error: {ex.Message}");
+            }
+        }
+
+        public static void ResetSingleWordTrapsVisuals()
+        {
+            bool hadVowelsZero = VowelsScoreZeroActive;
+            int hadBadSlot = BadSlotIndex;
+
+            VowelsScoreZeroActive = false;
+            BadSlotIndex = -1;
+
+            if (LogicManagerScript.Instance != null &&
+                (LogicManagerScript.Instance.currentSpecialRound == null || !LogicManagerScript.Instance.currentSpecialRound.vowelsDontScore))
+            {
+                LogicManagerScript.Instance.vowelsDontScore = false;
+            }
+
+            if (hadBadSlot != -1)
+            {
+                UpdateBadSlotVisuals();
+            }
+
+            if (hadVowelsZero || hadBadSlot != -1)
+            {
+                RefreshAllTileVisuals();
+            }
+        }
 
         public static void TriggerTrap(TrapType trap)
         {
@@ -113,7 +213,27 @@ namespace WordPlayArchipelago.Archipelago
 
                 if (LetterDrawerManager.Instance != null)
                 {
-                    LetterDrawerManager.Instance.UpdateBag();
+                    try
+                    {
+                        LetterDrawerManager.Instance.ChangeNumberOnBagIcon(-1);
+                        LetterBagManager.Instance.PunchLetterBagButton();
+                        LetterDrawerManager.Instance.RemoveTile();
+                    }
+                    catch (Exception ex)
+                    {
+                        Plugin.Logger?.LogWarning($"[TrapsManager] RemoveTile error: {ex.Message}");
+                        try
+                        {
+                            LetterDrawerManager.Instance.UpdateBag();
+                        }
+                        catch { }
+                    }
+                }
+
+                int num = LetterBagManager.Instance.LetterBag.Count + LetterBagManager.Instance.SpentLetters.Count;
+                if (num < 16 && LogicManagerScript.Instance != null)
+                {
+                    LogicManagerScript.Instance.GameOver(noTiles: true);
                 }
             }
         }
@@ -126,6 +246,7 @@ namespace WordPlayArchipelago.Archipelago
             BadSlotIndex = UnityEngine.Random.Range(0, maxSlot + 1);
             Plugin.Logger.LogWarning($"[Trap] Letter Slot #{BadSlotIndex + 1} scores 0 on next word!");
             (Plugin.StaticUI ?? Plugin.Instance?.UI)?.ShowBanner($"TRAP: Letter Slot #{BadSlotIndex + 1} will score 0 points!", new Color(1f, 0.5f, 0.2f), 5f);
+            UpdateBadSlotVisuals();
         }
 
         private static void ExecuteVowelsZeroScore()
@@ -137,6 +258,7 @@ namespace WordPlayArchipelago.Archipelago
             }
             Plugin.Logger.LogWarning("[Trap] Vowels score 0 on next word!");
             (Plugin.StaticUI ?? Plugin.Instance?.UI)?.ShowBanner("TRAP: Vowels will award 0 points on next word!", new Color(1f, 0.4f, 0.4f), 5f);
+            RefreshAllTileVisuals();
         }
 
         private static void ExecuteScrambleBoard()

@@ -156,6 +156,20 @@ Go to the [**Releases**](https://github.com/Roulesss/WordPlayArchipelago/release
 
 ## Known bugs/problems
 
-### 1. After getting the "Vowels score 0" trap, visually all vowels may still be worth 0 but they are counted right.
+### 1. WebSocket Compression Warning when connecting to game
 
-### 2. If you disconnect and reconnect, traps and items may reactivate in the main menu.
+Can it be added without sacrificing features? No.
+
+Explanation:
+- Archipelago.MultiClient.Net runs on Unity's Mono runtime using .NET Standard 2.0. The underlying .NET WebSocket client (System.Net.WebSockets.ClientWebSocket) only gained support for RFC 7692 permessage-deflate (WebSocket compression) in .NET 7+.
+- Supporting compression inside Unity Mono would require ripping out Archipelago.MultiClient.Net's built-in session transport and substituting a custom, unmanaged/native C++ library.
+- What would be sacrificed: connection stability, automatic reconnect handling, thread safety with Unity's main thread, and cross-platform compatibility.
+- Server Impact: The server message is only an advisory notice. Archipelago servers natively support uncompressed WebSockets; DeathLink, hint checks, item sync, and bounce packets work with zero functional difference.
+
+### 2. Client-side history
+
+There's currently no Client-side history of all checks sent and received. Something will very probably be implemented for it in the coming days/weeks.
+
+### 3. The mod may be ugly
+
+I don't really care that much.

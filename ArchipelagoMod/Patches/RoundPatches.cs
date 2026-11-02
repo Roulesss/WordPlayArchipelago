@@ -74,9 +74,8 @@ namespace WordPlayArchipelago.Patches
                 ItemManager.ApplyWordLengthRestriction();
                 ItemManager.ApplyBoardSlot();
 
-                // Clear any leftover single-word traps at run start
-                TrapsManager.VowelsScoreZeroActive = false;
-                TrapsManager.BadSlotIndex = -1;
+                // Clear any leftover single-word traps at run start and reset visuals
+                TrapsManager.ResetSingleWordTrapsVisuals();
             }
         }
     }
@@ -113,15 +112,6 @@ namespace WordPlayArchipelago.Patches
     [HarmonyPatch(typeof(LogicManagerScript), nameof(LogicManagerScript.GoToNextRound))]
     public static class GoToNextRoundPatch
     {
-        [HarmonyPrefix]
-        public static void Prefix()
-        {
-            if (ArchipelagoClient.IsArchipelagoRun && LogicManagerScript.Instance != null)
-            {
-                LogicManagerScript.Instance.allowedNumberOfLetters = ItemManager.UnlockedWordLength;
-            }
-        }
-
         [HarmonyPostfix]
         public static void Postfix()
         {
@@ -136,6 +126,12 @@ namespace WordPlayArchipelago.Patches
             if (TrapsManager.VowelsScoreZeroActive && LogicManagerScript.Instance != null)
             {
                 LogicManagerScript.Instance.vowelsDontScore = true;
+            }
+
+            TrapsManager.RefreshAllTileVisuals();
+            if (TrapsManager.BadSlotIndex >= 0)
+            {
+                TrapsManager.UpdateBadSlotVisuals();
             }
         }
     }

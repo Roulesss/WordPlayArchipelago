@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using DG.Tweening;
 using UnityEngine;
 
 namespace WordPlayArchipelago.Archipelago
@@ -18,15 +19,21 @@ namespace WordPlayArchipelago.Archipelago
 
         public static void ResetRunState()
         {
+            PendingBonusPlays = 0;
+            PendingBonusRefreshes = 0;
+        }
+
+        public static void ResetAllState()
+        {
             ProgressiveWordLengthCount = 0;
             ExtraBoardSlotsReceived = 0;
             PendingBonusPlays = 0;
             PendingBonusRefreshes = 0;
         }
 
-        public static void HandleReceivedItem(long itemId, string itemName)
+        public static void HandleReceivedItem(long itemId, string itemName, bool silentReplay = false)
         {
-            Plugin.Logger.LogInfo($"[ItemManager] Processing item: {itemName} (ID: {itemId})");
+            Plugin.Logger.LogInfo($"[ItemManager] Processing item: {itemName} (ID: {itemId}), silentReplay={silentReplay}");
 
             switch (itemId)
             {
@@ -34,98 +41,110 @@ namespace WordPlayArchipelago.Archipelago
                 case BaseItemId + 1: // Progressive Word Length
                     ProgressiveWordLengthCount++;
                     Plugin.Logger.LogInfo($"[Progression] Progressive Word Length received! Total: {ProgressiveWordLengthCount}. Max word length now {UnlockedWordLength}!");
-                    Plugin.Instance.UI.ShowBanner($"Progressive Word Length: Max {UnlockedWordLength} letters!", Color.green, 4f);
+                    if (!silentReplay)
+                    {
+                        Plugin.Instance?.UI?.ShowBanner($"Progressive Word Length: Max {UnlockedWordLength} letters!", Color.green, 4f);
+                    }
                     ApplyWordLengthRestriction();
                     break;
 
                 case BaseItemId + 2: // Extra Board Slot
                     ExtraBoardSlotsReceived++;
                     Plugin.Logger.LogInfo($"[Progression] Extra Board Slot received! Total bonus: {ExtraBoardSlotsReceived}");
-                    Plugin.Instance.UI.ShowBanner("Extra Board Slot Unlocked!", Color.green, 4f);
+                    if (!silentReplay)
+                    {
+                        Plugin.Instance?.UI?.ShowBanner("Extra Board Slot Unlocked!", Color.green, 4f);
+                    }
                     ApplyBoardSlot();
                     break;
 
                 case BaseItemId + 3: // Extra Play (Progression/Useful)
-                    if (LogicManagerScript.Instance != null)
+                    if (!silentReplay)
                     {
-                        LogicManagerScript.Instance.AddLives(2);
+                        if (LogicManagerScript.Instance != null)
+                        {
+                            LogicManagerScript.Instance.AddLives(2);
+                        }
+                        else
+                        {
+                            PendingBonusPlays += 2;
+                        }
+                        Plugin.Instance?.UI?.ShowBanner("+2 Plays Received!", Color.cyan, 3.5f);
                     }
-                    else
-                    {
-                        PendingBonusPlays += 2;
-                    }
-                    Plugin.Instance.UI.ShowBanner("+2 Plays Received!", Color.cyan, 3.5f);
                     break;
 
                 case BaseItemId + 4: // Extra Refresh (Progression/Useful)
-                    if (LogicManagerScript.Instance != null)
+                    if (!silentReplay)
                     {
-                        LogicManagerScript.Instance.ChangeNumberOfRefreshes(2);
+                        if (LogicManagerScript.Instance != null)
+                        {
+                            LogicManagerScript.Instance.ChangeNumberOfRefreshes(2);
+                        }
+                        else
+                        {
+                            PendingBonusRefreshes += 2;
+                        }
+                        Plugin.Instance?.UI?.ShowBanner("+2 Refreshes Received!", Color.yellow, 3.5f);
                     }
-                    else
-                    {
-                        PendingBonusRefreshes += 2;
-                    }
-                    Plugin.Instance.UI.ShowBanner("+2 Refreshes Received!", Color.yellow, 3.5f);
                     break;
 
                 case BaseItemId + 5: // Golden Tile Pack
-                    InjectSpecialTiles(SpecialTileManager.TileTypes.Golden, 2, "Golden Tiles");
+                    if (!silentReplay) InjectSpecialTiles(SpecialTileManager.TileTypes.Golden, 2, "Golden Tiles");
                     break;
 
                 case BaseItemId + 6: // Diamond Tile Pack
-                    InjectSpecialTiles(SpecialTileManager.TileTypes.Diamond, 2, "Diamond Tiles");
+                    if (!silentReplay) InjectSpecialTiles(SpecialTileManager.TileTypes.Diamond, 2, "Diamond Tiles");
                     break;
 
                 case BaseItemId + 7: // Emerald Tile Pack
-                    InjectSpecialTiles(SpecialTileManager.TileTypes.Emerald, 2, "Emerald Tiles");
+                    if (!silentReplay) InjectSpecialTiles(SpecialTileManager.TileTypes.Emerald, 2, "Emerald Tiles");
                     break;
 
                 case BaseItemId + 8: // Dot Tile Pack
-                    InjectSpecialTiles(SpecialTileManager.TileTypes.FullStop, 2, "Dot Tiles");
+                    if (!silentReplay) InjectSpecialTiles(SpecialTileManager.TileTypes.FullStop, 2, "Dot Tiles");
                     break;
 
                 // Filler Items
                 case BaseItemId + 101:
-                    FillerManager.GrantFiller(FillerManager.FillerType.WordScoreBonus5);
+                    if (!silentReplay) FillerManager.GrantFiller(FillerManager.FillerType.WordScoreBonus5);
                     break;
                 case BaseItemId + 102:
-                    FillerManager.GrantFiller(FillerManager.FillerType.WordScoreBonus10);
+                    if (!silentReplay) FillerManager.GrantFiller(FillerManager.FillerType.WordScoreBonus10);
                     break;
                 case BaseItemId + 103:
-                    FillerManager.GrantFiller(FillerManager.FillerType.ExtraPlay);
+                    if (!silentReplay) FillerManager.GrantFiller(FillerManager.FillerType.ExtraPlay);
                     break;
                 case BaseItemId + 104:
-                    FillerManager.GrantFiller(FillerManager.FillerType.ExtraRefresh);
+                    if (!silentReplay) FillerManager.GrantFiller(FillerManager.FillerType.ExtraRefresh);
                     break;
                 case BaseItemId + 105:
-                    FillerManager.GrantFiller(FillerManager.FillerType.AddGoldTile);
+                    if (!silentReplay) FillerManager.GrantFiller(FillerManager.FillerType.AddGoldTile);
                     break;
                 case BaseItemId + 106:
-                    FillerManager.GrantFiller(FillerManager.FillerType.AddDiamondTile);
+                    if (!silentReplay) FillerManager.GrantFiller(FillerManager.FillerType.AddDiamondTile);
                     break;
 
                 // Trap Items
                 case BaseItemId + 201:
-                    TrapsManager.TriggerTrap(TrapsManager.TrapType.LosePlay);
+                    if (!silentReplay) TrapsManager.TriggerTrap(TrapsManager.TrapType.LosePlay);
                     break;
                 case BaseItemId + 202:
-                    TrapsManager.TriggerTrap(TrapsManager.TrapType.LoseRefresh);
+                    if (!silentReplay) TrapsManager.TriggerTrap(TrapsManager.TrapType.LoseRefresh);
                     break;
                 case BaseItemId + 203:
-                    TrapsManager.TriggerTrap(TrapsManager.TrapType.DeleteBagLetter);
+                    if (!silentReplay) TrapsManager.TriggerTrap(TrapsManager.TrapType.DeleteBagLetter);
                     break;
                 case BaseItemId + 204:
-                    TrapsManager.TriggerTrap(TrapsManager.TrapType.BadLetterSlot);
+                    if (!silentReplay) TrapsManager.TriggerTrap(TrapsManager.TrapType.BadLetterSlot);
                     break;
                 case BaseItemId + 205:
-                    TrapsManager.TriggerTrap(TrapsManager.TrapType.VowelsZeroScore);
+                    if (!silentReplay) TrapsManager.TriggerTrap(TrapsManager.TrapType.VowelsZeroScore);
                     break;
                 case BaseItemId + 206:
-                    TrapsManager.TriggerTrap(TrapsManager.TrapType.ScrambleBoard);
+                    if (!silentReplay) TrapsManager.TriggerTrap(TrapsManager.TrapType.ScrambleBoard);
                     break;
                 case BaseItemId + 207:
-                    TrapsManager.TriggerTrap(TrapsManager.TrapType.Screamer);
+                    if (!silentReplay) TrapsManager.TriggerTrap(TrapsManager.TrapType.Screamer);
                     break;
 
                 default:
@@ -133,7 +152,10 @@ namespace WordPlayArchipelago.Archipelago
                     {
                         UnlockManager.RegisterUnlock(itemId);
                         Plugin.Logger.LogInfo($"[ItemManager] Unlocked perk via AP item: {itemName} (ID: {itemId})");
-                        Plugin.Instance?.UI?.ShowBanner($"Unlocked: {itemName}!", Color.green, 4f);
+                        if (!silentReplay)
+                        {
+                            Plugin.Instance?.UI?.ShowBanner($"Unlocked: {itemName}!", Color.green, 4f);
+                        }
                     }
                     else
                     {
@@ -147,47 +169,117 @@ namespace WordPlayArchipelago.Archipelago
         {
             int maxLen = UnlockedWordLength;
             Plugin.Logger.LogInfo($"[ItemManager] Applying Word Length Restriction: {maxLen} letters.");
-            if (LogicManagerScript.Instance != null)
-            {
-                LogicManagerScript.Instance.allowedNumberOfLetters = maxLen;
-            }
-            if (SubmissionScript.Instance != null)
-            {
-                SubmissionScript.Instance.longestAllowedWord = maxLen;
-                if (SubmissionScript.Instance.tileHolderScripts != null)
-                {
-                    for (int i = 0; i < SubmissionScript.Instance.tileHolderScripts.Count && i < 20; i++)
-                    {
-                        var holder = SubmissionScript.Instance.tileHolderScripts[i];
-                        if (holder == null) continue;
 
-                        bool active = (i < maxLen);
-                        holder.gameObject.SetActive(active);
-                        if (active)
+            var sub = SubmissionScript.Instance;
+            if (sub == null || sub.tileHolderScripts == null) return;
+
+            sub.longestAllowedWord = maxLen;
+
+            if (maxLen < 10)
+            {
+                for (int i = 0; i < 10 && i < sub.tileHolderScripts.Count; i++)
+                {
+                    var holder = sub.tileHolderScripts[i];
+                    if (holder != null) holder.gameObject.SetActive(i < maxLen);
+                }
+                for (int i = 10; i < 20 && i < sub.tileHolderScripts.Count; i++)
+                {
+                    var holder = sub.tileHolderScripts[i];
+                    if (holder != null) holder.gameObject.SetActive(false);
+                }
+
+                if (sub.topRowOfGrid != null)
+                {
+                    foreach (var item in sub.topRowOfGrid)
+                    {
+                        if (item != null) item.ChangeUpNavigationForLimitedLetters();
+                    }
+                }
+                if (BonusInventory.Instance?.allUpgradeStubs != null)
+                {
+                    foreach (var allUpgradeStub in BonusInventory.Instance.allUpgradeStubs)
+                    {
+                        if (allUpgradeStub != null) allUpgradeStub.SetNavigation();
+                    }
+                }
+                foreach (var tileHolderScript in sub.tileHolderScripts)
+                {
+                    if (tileHolderScript != null) tileHolderScript.ChangeDownNavigationForLimitedLetters();
+                }
+            }
+            else
+            {
+                for (int i = 0; i < 10 && i < sub.tileHolderScripts.Count; i++)
+                {
+                    var holder = sub.tileHolderScripts[i];
+                    if (holder != null) holder.gameObject.SetActive(true);
+                }
+
+                if (sub.numberOfFilledTiles >= 10 && !sub.ElevenPlusShowing)
+                {
+                    sub.ShowAllSubmissionHolders();
+                }
+
+                bool elevenPlus = sub.ElevenPlusShowing;
+                for (int i = 10; i < 20 && i < sub.tileHolderScripts.Count; i++)
+                {
+                    var holder = sub.tileHolderScripts[i];
+                    if (holder != null)
+                    {
+                        bool shouldBeActive = elevenPlus && (i < maxLen);
+                        if (!shouldBeActive)
                         {
+                            DOTween.Kill(holder);
+                            holder.transform.DOKill();
                             var cg = holder.GetComponent<CanvasGroup>();
                             if (cg != null)
                             {
-                                cg.alpha = 1f;
-                                cg.interactable = true;
-                                cg.blocksRaycasts = true;
+                                DOTween.Kill(cg);
+                                cg.alpha = 0f;
                             }
+                        }
+                        holder.gameObject.SetActive(shouldBeActive);
+                    }
+                }
+
+                if (sub.topRowOfGrid != null)
+                {
+                    foreach (var item in sub.topRowOfGrid)
+                    {
+                        if (item != null)
+                        {
+                            if (elevenPlus) item.AddSecondRowToUpNavigation();
+                            else item.RestoreNormalUpNavigation();
                         }
                     }
                 }
-                try
+                if (BonusInventory.Instance?.allUpgradeStubs != null)
                 {
-                    SubmissionScript.Instance.RestrictSubmissionBoxes(maxLen);
+                    foreach (var allUpgradeStub in BonusInventory.Instance.allUpgradeStubs)
+                    {
+                        if (allUpgradeStub != null) allUpgradeStub.SetNavigation();
+                    }
                 }
-                catch (Exception ex)
+                for (int i = 0; i < 10 && i < sub.tileHolderScripts.Count; i++)
                 {
-                    Plugin.Logger.LogWarning($"[ItemManager] RestrictSubmissionBoxes warning: {ex.Message}");
+                    var holder = sub.tileHolderScripts[i];
+                    if (holder != null)
+                    {
+                        if (elevenPlus) holder.AddSecondRowToDownNavigation();
+                        else holder.RestoreNormalDownNavigation();
+                    }
                 }
-                try
-                {
-                    SubmissionScript.Instance.GetRightMostSubmissionSlot();
-                }
-                catch { }
+            }
+
+            try
+            {
+                sub.GetRightMostSubmissionSlot();
+            }
+            catch { }
+
+            if (TrapsManager.BadSlotIndex >= 0)
+            {
+                TrapsManager.UpdateBadSlotVisuals();
             }
         }
 

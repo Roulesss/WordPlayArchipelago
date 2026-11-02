@@ -41,10 +41,7 @@ namespace WordPlayArchipelago.Archipelago
             }
             if (locationId >= 91101 && locationId <= 91157)
             {
-                int offset = (int)(locationId - 91101);
-                int r = (offset / 3) + 1;
-                int c = (offset % 3) + 1;
-                return $"Round {r} Shop Choice #{c}";
+                return "Round Shop Choice";
             }
             foreach (var kvp in WordScoreMilestones)
             {

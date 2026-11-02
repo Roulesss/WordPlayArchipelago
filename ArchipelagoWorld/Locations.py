@@ -20,7 +20,7 @@ for r in range(1, 21):
 for r in range(1, 20):
     for c in range(1, 4):
         code = BASE_LOCATION_ID + 100 + ((r - 1) * 3) + c
-        all_location_data_table[f"Round {r} Shop Choice #{c}"] = LocationData(code)
+        all_location_data_table[f"Round Shop Choice #{((r - 1) * 3) + c}"] = LocationData(code)
 
 # 3. Word Score Milestones (Points on a single word)
 word_score_milestones = [
@@ -88,7 +88,7 @@ def get_locations_for_difficulty(difficulty_name: str) -> Dict[str, LocationData
     # Shop Purchases (Rounds 1 to rounds - 1)
     for r in range(1, rounds):
         for c in range(1, 4):
-            name = f"Round {r} Shop Choice #{c}"
+            name = f"Round Shop Choice #{((r - 1) * 3) + c}"
             active_locations[name] = all_location_data_table[name]
 
     # Word Score Milestones

@@ -36,6 +36,9 @@ def build_apworld():
     dest_apworld = os.path.join(RELEASE_DIR, 'word_play.apworld')
 
     with zipfile.ZipFile(dest_apworld, 'w', compression=zipfile.ZIP_DEFLATED) as z:
+        manifest_file = os.path.join(src_world_dir, 'archipelago.json')
+        if os.path.isfile(manifest_file):
+            z.write(manifest_file, 'archipelago.json')
         for root, dirs, files in os.walk(src_world_dir):
             if '__pycache__' in root:
                 continue
@@ -56,15 +59,13 @@ def build_apworld():
 
 def ensure_mod_built():
     bin_release = os.path.join(ROOT_DIR, 'ArchipelagoMod', 'bin', 'Release', 'netstandard2.1')
-    mod_dll = os.path.join(bin_release, 'WordPlayArchipelago.dll')
-    if not os.path.isfile(mod_dll):
-        print("Mod assembly not found. Compiling via dotnet build...")
-        csproj_path = os.path.join(ROOT_DIR, 'ArchipelagoMod', 'ArchipelagoMod.csproj')
-        cmd = ["dotnet", "build", csproj_path, "-c", "Release"]
-        res = subprocess.run(cmd, cwd=ROOT_DIR)
-        if res.returncode != 0:
-            print("Error: dotnet build failed. Please build ArchipelagoMod before packaging.")
-            sys.exit(1)
+    print("Compiling mod via dotnet build (Release)...")
+    csproj_path = os.path.join(ROOT_DIR, 'ArchipelagoMod', 'ArchipelagoMod.csproj')
+    cmd = ["dotnet", "build", csproj_path, "-c", "Release"]
+    res = subprocess.run(cmd, cwd=ROOT_DIR)
+    if res.returncode != 0:
+        print("Error: dotnet build failed. Please build ArchipelagoMod before packaging.")
+        sys.exit(1)
     return bin_release
 
 def find_or_download_bepinex():
