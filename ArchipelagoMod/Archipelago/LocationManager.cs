@@ -64,6 +64,16 @@ namespace WordPlayArchipelago.Archipelago
             Plugin.Logger?.LogInfo($"[LocationManager] New Run #{_runCounter} started. Shop checks rotated.");
         }
 
+        public static void RestoreShopLocations(IList<long> locations)
+        {
+            if (locations == null) return;
+            for (int i = 0; i < CurrentShopLocations.Length; i++)
+            {
+                CurrentShopLocations[i] = i < locations.Count ? locations[i] : 0;
+            }
+            Plugin.Logger?.LogInfo($"[LocationManager] Restored shop locations: [{string.Join(", ", CurrentShopLocations)}]");
+        }
+
         public static long GetCurrentShopLocation(int cardIndex)
         {
             if (cardIndex < 0 || cardIndex >= CurrentShopLocations.Length)
@@ -122,11 +132,24 @@ namespace WordPlayArchipelago.Archipelago
             // On new round or new run (reroll == false): avoid PreviousShopLocations if possible.
             var toAvoid = reroll ? currentlyDisplayed : (PreviousShopLocations.Count > 0 ? PreviousShopLocations : currentlyDisplayed);
 
+            // Use deterministic RNG for new round shops so that same seed + round produces identical locations
+            System.Random rng;
+            if (!reroll && LogicManagerScript.Instance != null)
+            {
+                int round = LogicManagerScript.Instance.currentRound;
+                int seed = LogicManagerScript.Instance.gameSeed ^ (round * 10007);
+                rng = new System.Random(seed);
+            }
+            else
+            {
+                rng = _rng;
+            }
+
             List<long> picked = new List<long>();
 
             // 1. Fresh unchecked locations (not in toAvoid)
             var freshUnchecked = uncheckedLocations.Where(id => !toAvoid.Contains(id)).ToList();
-            Shuffle(freshUnchecked);
+            Shuffle(freshUnchecked, rng);
             foreach (var loc in freshUnchecked)
             {
                 if (picked.Count >= count) break;
@@ -137,7 +160,7 @@ namespace WordPlayArchipelago.Archipelago
             if (picked.Count < count && uncheckedLocations.Count > picked.Count)
             {
                 var remainingUnchecked = uncheckedLocations.Where(id => !picked.Contains(id)).ToList();
-                Shuffle(remainingUnchecked);
+                Shuffle(remainingUnchecked, rng);
                 foreach (var loc in remainingUnchecked)
                 {
                     if (picked.Count >= count) break;
@@ -149,7 +172,7 @@ namespace WordPlayArchipelago.Archipelago
             if (picked.Count < count && checkedLocations.Count > 0)
             {
                 var freshChecked = checkedLocations.Where(id => !toAvoid.Contains(id) && !picked.Contains(id)).ToList();
-                Shuffle(freshChecked);
+                Shuffle(freshChecked, rng);
                 foreach (var loc in freshChecked)
                 {
                     if (picked.Count >= count) break;
@@ -159,7 +182,7 @@ namespace WordPlayArchipelago.Archipelago
                 if (picked.Count < count)
                 {
                     var remainingChecked = checkedLocations.Where(id => !picked.Contains(id)).ToList();
-                    Shuffle(remainingChecked);
+                    Shuffle(remainingChecked, rng);
                     foreach (var loc in remainingChecked)
                     {
                         if (picked.Count >= count) break;
@@ -194,11 +217,11 @@ namespace WordPlayArchipelago.Archipelago
             }
         }
 
-        private static void Shuffle<T>(List<T> list)
+        private static void Shuffle<T>(List<T> list, System.Random rng)
         {
             for (int i = list.Count - 1; i > 0; i--)
             {
-                int j = _rng.Next(i + 1);
+                int j = rng.Next(i + 1);
                 T temp = list[i];
                 list[i] = list[j];
                 list[j] = temp;

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using HarmonyLib;
 using TMPro;
 using UnityEngine;
@@ -15,13 +16,64 @@ namespace WordPlayArchipelago.Patches
         public static GameObject? ApTileGameObject { get; private set; }
         public static Button? ApButton { get; private set; }
 
+        private static GameObject? _apButtonsRoot;
+        private static Button? _apSingleButton;
+        private static Button? _apResumeButton;
+        private static Button? _apNewRunButton;
+
         private static bool _subscribedToEvents = false;
+
+        public static void SetApSelected(bool selected)
+        {
+            IsApSelected = selected;
+        }
+
+        public static void HideApButtons(LevelSelectScript? levelSelect)
+        {
+            IsApSelected = false;
+
+            if (_apButtonsRoot != null)
+            {
+                _apButtonsRoot.SetActive(false);
+            }
+            if (_apSingleButton != null) _apSingleButton.gameObject.SetActive(false);
+            if (_apResumeButton != null) _apResumeButton.gameObject.SetActive(false);
+            if (_apNewRunButton != null) _apNewRunButton.gameObject.SetActive(false);
+
+            LevelSelectScript? target = levelSelect ?? CurrentLevelSelect;
+            if (target == null || !target.gameObject.activeInHierarchy)
+            {
+                target = UnityEngine.Object.FindObjectOfType<LevelSelectScript>();
+                if (target != null) CurrentLevelSelect = target;
+            }
+
+            if (target != null)
+            {
+                Button? playButton = Traverse.Create(target).Field("playButton").GetValue<Button>();
+                if (playButton != null)
+                {
+                    Transform? parent = playButton.transform.parent;
+                    if (parent != null)
+                    {
+                        for (int i = 0; i < parent.childCount; i++)
+                        {
+                            Transform child = parent.GetChild(i);
+                            if (child != null && child.name.StartsWith("AP_"))
+                            {
+                                child.gameObject.SetActive(false);
+                            }
+                        }
+                    }
+                    playButton.gameObject.SetActive(true);
+                }
+            }
+        }
 
         public static void OnLevelSelectStart(LevelSelectScript __instance)
         {
             Plugin.Logger.LogInfo($"[LevelSelect] OnLevelSelectStart called for '{__instance.gameObject.name}'!");
             CurrentLevelSelect = __instance;
-            IsApSelected = false;
+            HideApButtons(__instance);
 
             if (!_subscribedToEvents)
             {
@@ -252,32 +304,41 @@ namespace WordPlayArchipelago.Patches
 
             if (detailTitle != null)
             {
-                detailTitle.text = connected
-                    ? $"ARCHIPELAGO: {Plugin.Instance.Client.Difficulty.ToUpper()} MODE"
-                    : "ARCHIPELAGO MULTIWORLD";
+                if (connected)
+                {
+                    string diff = Plugin.Instance.Client.Difficulty;
+                    string diffTitle = !string.IsNullOrEmpty(diff)
+                        ? char.ToUpper(diff[0]) + diff.Substring(1).ToLower()
+                        : "Normal";
+                    detailTitle.text = $"Archipelago: {diffTitle} Mode";
+                }
+                else
+                {
+                    detailTitle.text = "Archipelago Multiworld";
+                }
             }
 
             if (detailDescription != null)
             {
                 if (connected)
                 {
-                    detailDescription.text =
-                        $"Server: {host}:{port}\n" +
-                        $"Slot: {Plugin.Instance.Client.SlotName} | Rounds: {Plugin.Instance.Client.TotalRoundsForDifficulty}\n" +
-                        $"Goal: Win {Plugin.Instance.Client.WinsRequired} Run(s)  [Progress: {Plugin.Instance.Client.CompletedWins}/{Plugin.Instance.Client.WinsRequired}]";
+                    int rounds = Plugin.Instance.Client.TotalRoundsForDifficulty;
+                    int winsReq = Plugin.Instance.Client.WinsRequired;
+                    int completedWins = Plugin.Instance.Client.CompletedWins;
+
+                    string winGoal = winsReq > 1
+                        ? $"Goal: Win {winsReq} runs ({completedWins}/{winsReq}) • {rounds} rounds"
+                        : $"Goal: Win 1 run • {rounds} rounds";
+
+                    detailDescription.text = winGoal;
                 }
                 else if (connecting)
                 {
-                    detailDescription.text =
-                        $"Connecting to {host}:{port} as '{slot}'...\n\n" +
-                        "Establishing socket connection. Please wait...";
+                    detailDescription.text = $"Connecting to {host}:{port} as '{slot}'...";
                 }
                 else
                 {
-                    detailDescription.text =
-                        $"Server: {host}:{port}\n" +
-                        $"Slot Name: {slot}\n" +
-                        "Config file: BepInEx/config/com.archipelago.wordplay.cfg (auto-reloaded)";
+                    detailDescription.text = $"Connect to {host}:{port} as '{slot}'\nConfig: BepInEx/config/com.archipelago.wordplay.cfg";
                 }
             }
 
@@ -285,95 +346,476 @@ namespace WordPlayArchipelago.Patches
             {
                 if (connected)
                 {
-                    detailBestScore.text = $"CONNECTED: {Plugin.Instance.Client.SlotName} (READY TO PLAY)";
+                    detailBestScore.text = $"Connected: {Plugin.Instance.Client.SlotName}";
                 }
                 else if (connecting)
                 {
-                    detailBestScore.text = $"CONNECTING TO {host}:{port}...";
+                    detailBestScore.text = "Connecting to server...";
                 }
                 else if (!string.IsNullOrEmpty(lastError))
                 {
-                    detailBestScore.text = $"FAILED: {lastError} (Check config)";
+                    detailBestScore.text = $"Connection error: {lastError}";
                 }
                 else
                 {
-                    detailBestScore.text = "NOT CONNECTED - CLICK CONNECT BELOW";
+                    detailBestScore.text = "Not connected";
                 }
             }
 
             if (playButton != null)
             {
-                TMP_Text playText = playButton.GetComponentInChildren<TMP_Text>();
+                EnsureApButtons(playButton);
 
-                // Completely overwrite ButtonClickedEvent to clear any inspector persistent calls
-                playButton.onClick = new Button.ButtonClickedEvent();
+                // Hide vanilla playButton completely so it is never modified or distorted
+                playButton.gameObject.SetActive(false);
+                if (_apButtonsRoot != null) _apButtonsRoot.SetActive(true);
+
+                bool hasApInProgress = PlayerPrefs.GetInt("AP_RunInProgress", 0) == 1 && System.IO.File.Exists(SaveDataSavePatch.ApSaveFilePath);
+                int inProgressRound = PlayerPrefs.GetInt("AP_InProgressRound", 1);
 
                 if (connecting)
                 {
-                    playButton.interactable = false;
-                    if (playText != null) playText.text = "CONNECTING...";
+                    if (_apResumeButton != null) _apResumeButton.gameObject.SetActive(false);
+                    if (_apNewRunButton != null) _apNewRunButton.gameObject.SetActive(false);
+
+                    if (_apSingleButton != null)
+                    {
+                        _apSingleButton.gameObject.SetActive(true);
+                        _apSingleButton.interactable = false;
+                        var sText = _apSingleButton.GetComponentInChildren<TMP_Text>();
+                        if (sText != null) sText.text = "Connecting...";
+                    }
                 }
                 else if (connected)
                 {
-                    playButton.interactable = true;
-                    if (playText != null) playText.text = "PLAY";
-
-                    playButton.onClick.AddListener(() =>
+                    if (hasApInProgress)
                     {
-                        Plugin.Logger.LogInfo($"[LevelSelect] Connected -> Launching AP Game (Difficulty ID: {Plugin.Instance.Client.DifficultyId})!");
-                        ArchipelagoClient.IsArchipelagoRun = true;
-                        TitleScreenManager.Instance.PlayGame(Plugin.Instance.Client.DifficultyId);
-                    });
+                        if (_apSingleButton != null) _apSingleButton.gameObject.SetActive(false);
+
+                        Image vImg = playButton.GetComponent<Image>();
+                        Sprite vanillaSprite = vImg != null ? vImg.sprite : null!;
+                        float btnWidth = 460f;
+                        float btnHeight = playButton.GetComponent<RectTransform>() != null && playButton.GetComponent<RectTransform>().sizeDelta.y > 0 ? playButton.GetComponent<RectTransform>().sizeDelta.y : 60f;
+                        float spacing = 25f;
+                        float leftX = -(btnWidth / 2f + spacing / 2f);
+                        float rightX = (btnWidth / 2f + spacing / 2f);
+
+                        // 1. Resume Button
+                        if (_apResumeButton != null)
+                        {
+                            _apResumeButton.gameObject.SetActive(true);
+                            _apResumeButton.interactable = true;
+                            ConfigureApButton(_apResumeButton.gameObject, $"Resume (Round {inProgressRound})", isAmber: false, leftX, vanillaSprite, btnWidth, btnHeight);
+
+                            _apResumeButton.onClick = new Button.ButtonClickedEvent();
+                            _apResumeButton.onClick.AddListener(() =>
+                            {
+                                Plugin.Logger.LogInfo($"[LevelSelect] Connected -> Resuming AP Game at Round {inProgressRound}!");
+                                ArchipelagoClient.IsArchipelagoRun = true;
+                                TitleScreenManager.Instance.PlayGame(0);
+                            });
+                        }
+
+                        // 2. New Run Button
+                        if (_apNewRunButton != null)
+                        {
+                            _apNewRunButton.gameObject.SetActive(true);
+                            _apNewRunButton.interactable = true;
+                            ConfigureApButton(_apNewRunButton.gameObject, "New Run", isAmber: true, rightX, vanillaSprite, btnWidth, btnHeight);
+
+                            _apNewRunButton.onClick = new Button.ButtonClickedEvent();
+                            _apNewRunButton.onClick.AddListener(() =>
+                            {
+                                Plugin.Logger.LogInfo("[LevelSelect] 'New Run' clicked -> Clearing saved resume and starting fresh AP run!");
+                                SaveDataSavePatch.ClearApResume();
+                                ArchipelagoClient.IsArchipelagoRun = true;
+                                TitleScreenManager.Instance.PlayGame(Plugin.Instance.Client.DifficultyId);
+                            });
+                        }
+                    }
+                    else
+                    {
+                        if (_apResumeButton != null) _apResumeButton.gameObject.SetActive(false);
+                        if (_apNewRunButton != null) _apNewRunButton.gameObject.SetActive(false);
+
+                        if (_apSingleButton != null)
+                        {
+                            _apSingleButton.gameObject.SetActive(true);
+                            _apSingleButton.interactable = true;
+                            var sText = _apSingleButton.GetComponentInChildren<TMP_Text>();
+                            if (sText != null) sText.text = "Play";
+
+                            _apSingleButton.onClick = new Button.ButtonClickedEvent();
+                            _apSingleButton.onClick.AddListener(() =>
+                            {
+                                Plugin.Logger.LogInfo($"[LevelSelect] Connected -> Launching AP Game (Difficulty ID: {Plugin.Instance.Client.DifficultyId})!");
+                                ArchipelagoClient.IsArchipelagoRun = true;
+                                TitleScreenManager.Instance.PlayGame(Plugin.Instance.Client.DifficultyId);
+                            });
+                        }
+                    }
                 }
                 else
                 {
-                    playButton.interactable = true;
-                    if (playText != null) playText.text = !string.IsNullOrEmpty(lastError) ? "RETRY CONNECT" : "CONNECT";
+                    if (_apResumeButton != null) _apResumeButton.gameObject.SetActive(false);
+                    if (_apNewRunButton != null) _apNewRunButton.gameObject.SetActive(false);
 
-                    playButton.onClick.AddListener(() =>
+                    if (_apSingleButton != null)
                     {
-                        Plugin.Logger.LogInfo("[LevelSelect] AP Action Button Clicked -> Connecting to Archipelago...");
-                        try
-                        {
-                            Plugin.Instance.Config.Reload();
-                            Plugin.Logger.LogInfo("[LevelSelect] Reloaded com.archipelago.wordplay.cfg from disk.");
-                        }
-                        catch (Exception ex)
-                        {
-                            Plugin.Logger.LogWarning($"[LevelSelect] Could not reload config: {ex.Message}");
-                        }
+                        _apSingleButton.gameObject.SetActive(true);
+                        _apSingleButton.interactable = true;
+                        var sText = _apSingleButton.GetComponentInChildren<TMP_Text>();
+                        if (sText != null) sText.text = !string.IsNullOrEmpty(lastError) ? "Retry Connect" : "Connect";
 
-                        string h = Plugin.Instance.ServerAddress.Value;
-                        int p = Plugin.Instance.ServerPort.Value;
-                        string s = Plugin.Instance.SlotName.Value;
-                        string pw = Plugin.Instance.Password.Value;
+                        _apSingleButton.onClick = new Button.ButtonClickedEvent();
+                        _apSingleButton.onClick.AddListener(() =>
+                        {
+                            Plugin.Logger.LogInfo("[LevelSelect] AP Action Button Clicked -> Connecting to Archipelago...");
+                            try
+                            {
+                                Plugin.Instance.Config.Reload();
+                                Plugin.Logger.LogInfo("[LevelSelect] Reloaded com.archipelago.wordplay.cfg from disk.");
+                            }
+                            catch (Exception ex)
+                            {
+                                Plugin.Logger.LogWarning($"[LevelSelect] Could not reload config: {ex.Message}");
+                            }
 
-                        Plugin.Instance.Client.Connect(h, p, s, pw);
-                        RefreshApDetails(levelSelect);
-                    });
+                            string h = Plugin.Instance.ServerAddress.Value;
+                            int p = Plugin.Instance.ServerPort.Value;
+                            string s = Plugin.Instance.SlotName.Value;
+                            string pw = Plugin.Instance.Password.Value;
+
+                            Plugin.Instance.Client.Connect(h, p, s, pw);
+                            RefreshApDetails(levelSelect);
+                        });
+                    }
+                }
+            }
+        }
+
+        private static Sprite? _cachedAmberButtonSprite;
+
+        public static Sprite GetAmberButtonSprite(Sprite source)
+        {
+            if (_cachedAmberButtonSprite != null) return _cachedAmberButtonSprite;
+            if (source == null) return source!;
+
+            try
+            {
+                Texture2D srcTex = source.texture;
+                if (srcTex == null) return source;
+
+                RenderTexture rt = RenderTexture.GetTemporary(srcTex.width, srcTex.height, 0, RenderTextureFormat.ARGB32);
+                Graphics.Blit(srcTex, rt);
+                RenderTexture prev = RenderTexture.active;
+                RenderTexture.active = rt;
+
+                Texture2D readableTex = new Texture2D(srcTex.width, srcTex.height, TextureFormat.RGBA32, false);
+                readableTex.ReadPixels(new Rect(0, 0, srcTex.width, srcTex.height), 0, 0);
+                readableTex.Apply();
+
+                RenderTexture.active = prev;
+                RenderTexture.ReleaseTemporary(rt);
+
+                Color[] pixels = readableTex.GetPixels();
+                float maxLum = 0.01f;
+                for (int i = 0; i < pixels.Length; i++)
+                {
+                    if (pixels[i].a > 0.1f)
+                    {
+                        float lum = pixels[i].r * 0.299f + pixels[i].g * 0.587f + pixels[i].b * 0.114f;
+                        if (lum > maxLum) maxLum = lum;
+                    }
+                }
+
+                for (int i = 0; i < pixels.Length; i++)
+                {
+                    Color c = pixels[i];
+                    if (c.a > 0.01f)
+                    {
+                        float lum = (c.r * 0.299f + c.g * 0.587f + c.b * 0.114f) / maxLum;
+                        lum = Mathf.Clamp01(lum);
+                        pixels[i] = new Color(lum, lum, lum, c.a);
+                    }
+                }
+
+                readableTex.SetPixels(pixels);
+                readableTex.Apply();
+
+                _cachedAmberButtonSprite = Sprite.Create(
+                    readableTex,
+                    source.rect,
+                    source.pivot,
+                    source.pixelsPerUnit,
+                    0,
+                    SpriteMeshType.FullRect,
+                    source.border
+                );
+                _cachedAmberButtonSprite.name = "AP_Pill_Amber_Base";
+                Plugin.Logger.LogInfo("[LevelSelect] Successfully generated normalized grayscale sprite for Amber button!");
+                return _cachedAmberButtonSprite;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Logger.LogError($"[LevelSelect] Failed to create grayscale sprite: {ex}");
+                return source;
+            }
+        }
+
+        private static void ConfigureApButton(GameObject btnGo, string label, bool isAmber, float posX, Sprite vanillaSprite, float btnWidth, float btnHeight)
+        {
+            RectTransform bRT = btnGo.GetComponent<RectTransform>();
+            if (bRT != null)
+            {
+                bRT.anchorMin = new Vector2(0.5f, 0.5f);
+                bRT.anchorMax = new Vector2(0.5f, 0.5f);
+                bRT.pivot = new Vector2(0.5f, 0.5f);
+                bRT.sizeDelta = new Vector2(btnWidth, btnHeight);
+                bRT.anchoredPosition = new Vector2(posX, 0f);
+            }
+
+            // Set up Image & Color
+            Image img = btnGo.GetComponent<Image>();
+            if (img != null)
+            {
+                var effect = btnGo.GetComponent<Coffee.UIEffects.UIEffect>();
+                if (effect != null) UnityEngine.Object.Destroy(effect);
+
+                if (isAmber)
+                {
+                    img.sprite = GetAmberButtonSprite(vanillaSprite);
+                    img.color = new Color(0.98f, 0.62f, 0.12f, 1f); // Vibrant true amber/gold
+                }
+                else
+                {
+                    img.sprite = vanillaSprite;
+                    img.color = Color.white; // Vanilla green sprite
+                }
+            }
+
+            // Button selection colors (prevent ButtonTextColouriser or Button from forcing green on hover)
+            Button btn = btnGo.GetComponent<Button>();
+            if (btn != null && isAmber)
+            {
+                ColorBlock cb = btn.colors;
+                cb.normalColor = Color.white;
+                cb.highlightedColor = new Color(1.1f, 1.1f, 1.1f, 1f);
+                cb.selectedColor = Color.white;
+                btn.colors = cb;
+            }
+
+            // Check if root has UIOutline
+            var rootOutline = btnGo.GetComponent<UIOutline>();
+            if (rootOutline != null)
+            {
+                rootOutline.enabled = true;
+                rootOutline.SetVerticesDirty();
+            }
+
+            // Inspect and configure children
+            Transform? outlineTransform = null;
+            Transform? arrowTransform = null;
+            TMP_Text? labelTMP = null;
+
+            for (int i = 0; i < btnGo.transform.childCount; i++)
+            {
+                Transform child = btnGo.transform.GetChild(i);
+                child.gameObject.SetActive(true);
+
+                var tmp = child.GetComponent<TMP_Text>();
+                if (tmp != null)
+                {
+                    labelTMP = tmp;
+                    continue;
+                }
+
+                var uio = child.GetComponent<UIOutline>();
+                string cName = child.name.ToLower();
+                if (uio != null || cName.Contains("outline") || cName.Contains("border") || cName.Contains("contour"))
+                {
+                    outlineTransform = child;
+                }
+                else
+                {
+                    arrowTransform = child;
+                }
+            }
+
+            // 1. Text Label
+            if (labelTMP != null)
+            {
+                labelTMP.rectTransform.anchorMin = Vector2.zero;
+                labelTMP.rectTransform.anchorMax = Vector2.one;
+                labelTMP.rectTransform.offsetMin = new Vector2(30f, 0f);
+                labelTMP.rectTransform.offsetMax = new Vector2(-80f, 0f);
+                labelTMP.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+                labelTMP.alignment = TextAlignmentOptions.Center;
+                labelTMP.fontSize = 20f;
+                labelTMP.enableWordWrapping = false;
+                labelTMP.text = label;
+            }
+
+            // 2. Outline / Contour
+            if (outlineTransform != null)
+            {
+                RectTransform oRT = outlineTransform.GetComponent<RectTransform>();
+                if (oRT != null)
+                {
+                    oRT.anchorMin = Vector2.zero;
+                    oRT.anchorMax = Vector2.one;
+                    oRT.offsetMin = Vector2.zero;
+                    oRT.offsetMax = Vector2.zero;
+                    oRT.pivot = new Vector2(0.5f, 0.5f);
+                }
+                var uio = outlineTransform.GetComponent<UIOutline>();
+                if (uio != null)
+                {
+                    uio.enabled = true;
+                    uio.SetVerticesDirty();
+                }
+            }
+            else if (rootOutline == null)
+            {
+                // Create AP_Outline with UIOutline so the button ALWAYS has the comic contour!
+                Transform existingOutline = btnGo.transform.Find("AP_Outline");
+                GameObject oGo = existingOutline != null ? existingOutline.gameObject : new GameObject("AP_Outline", typeof(RectTransform));
+                oGo.transform.SetParent(btnGo.transform, false);
+                oGo.transform.SetSiblingIndex(0); // Place behind text and arrow
+                RectTransform oRT = oGo.GetComponent<RectTransform>();
+                oRT.anchorMin = Vector2.zero;
+                oRT.anchorMax = Vector2.one;
+                oRT.offsetMin = Vector2.zero;
+                oRT.offsetMax = Vector2.zero;
+                oRT.pivot = new Vector2(0.5f, 0.5f);
+
+                var uio = oGo.GetComponent<UIOutline>() ?? oGo.AddComponent<UIOutline>();
+                uio._outlineWidth = 4f;
+                uio.color = new Color(0.12f, 0.12f, 0.12f, 1f); // Dark contour matching the game
+                uio.enabled = true;
+                uio.SetVerticesDirty();
+                Plugin.Logger.LogInfo($"[LevelSelect] Created AP_Outline with UIOutline for '{btnGo.name}'");
+            }
+
+            // 3. Arrow Icon
+            if (arrowTransform != null)
+            {
+                RectTransform aRT = arrowTransform.GetComponent<RectTransform>();
+                if (aRT != null)
+                {
+                    aRT.anchorMin = new Vector2(1f, 0.5f);
+                    aRT.anchorMax = new Vector2(1f, 0.5f);
+                    aRT.pivot = new Vector2(0.5f, 0.5f);
+                    aRT.anchoredPosition = new Vector2(-45f, 0f);
+                }
+            }
+        }
+
+        private static void EnsureApButtons(Button vanillaPlayButton)
+        {
+            Transform parent = vanillaPlayButton.transform.parent;
+            RectTransform playRT = vanillaPlayButton.GetComponent<RectTransform>();
+
+            if (_apButtonsRoot == null && parent != null)
+            {
+                Transform existing = parent.Find("AP_ButtonsRoot");
+                if (existing != null)
+                {
+                    _apButtonsRoot = existing.gameObject;
+                    _apSingleButton = existing.Find("AP_SingleButton")?.GetComponent<Button>();
+                    _apResumeButton = existing.Find("AP_ResumeButton")?.GetComponent<Button>();
+                    _apNewRunButton = existing.Find("AP_NewRunButton")?.GetComponent<Button>();
+                }
+            }
+
+            if (_apButtonsRoot == null)
+            {
+                _apButtonsRoot = new GameObject("AP_ButtonsRoot", typeof(RectTransform));
+                _apButtonsRoot.transform.SetParent(parent, false);
+                var rootRT = _apButtonsRoot.GetComponent<RectTransform>();
+                if (playRT != null)
+                {
+                    rootRT.anchorMin = playRT.anchorMin;
+                    rootRT.anchorMax = playRT.anchorMax;
+                    rootRT.pivot = playRT.pivot;
+                    rootRT.anchoredPosition = playRT.anchoredPosition;
+                    rootRT.sizeDelta = playRT.sizeDelta;
+                }
+            }
+
+            // 1. Single Action Button (clean clone of vanillaPlayButton)
+            if (_apSingleButton == null)
+            {
+                Transform existingSingle = _apButtonsRoot.transform.Find("AP_SingleButton");
+                if (existingSingle != null)
+                {
+                    _apSingleButton = existingSingle.GetComponent<Button>();
+                }
+                else
+                {
+                    GameObject singleGo = UnityEngine.Object.Instantiate(vanillaPlayButton.gameObject, _apButtonsRoot.transform);
+                    singleGo.name = "AP_SingleButton";
+                    _apSingleButton = singleGo.GetComponent<Button>();
+                    var sRT = singleGo.GetComponent<RectTransform>();
+                    if (sRT != null)
+                    {
+                        sRT.anchorMin = new Vector2(0.5f, 0.5f);
+                        sRT.anchorMax = new Vector2(0.5f, 0.5f);
+                        sRT.pivot = new Vector2(0.5f, 0.5f);
+                        sRT.anchoredPosition = Vector2.zero;
+                        sRT.sizeDelta = playRT != null ? playRT.sizeDelta : new Vector2(180f, 60f);
+                    }
+                }
+            }
+
+            // Dual button geometry
+            float btnWidth = 460f;
+            float btnHeight = playRT != null && playRT.sizeDelta.y > 0 ? playRT.sizeDelta.y : 60f;
+            float spacing = 25f;
+            float leftX = -(btnWidth / 2f + spacing / 2f);
+            float rightX = (btnWidth / 2f + spacing / 2f);
+
+            Image vImg = vanillaPlayButton.GetComponent<Image>();
+            Sprite vanillaSprite = vImg != null ? vImg.sprite : null!;
+
+            // 2. Dual Resume Button (460px wide, green)
+            if (_apResumeButton == null)
+            {
+                Transform existingResume = _apButtonsRoot.transform.Find("AP_ResumeButton");
+                if (existingResume != null)
+                {
+                    _apResumeButton = existingResume.GetComponent<Button>();
+                }
+                else
+                {
+                    GameObject resumeGo = UnityEngine.Object.Instantiate(vanillaPlayButton.gameObject, _apButtonsRoot.transform);
+                    resumeGo.name = "AP_ResumeButton";
+                    _apResumeButton = resumeGo.GetComponent<Button>();
+                    ConfigureApButton(resumeGo, "Resume", isAmber: false, leftX, vanillaSprite, btnWidth, btnHeight);
+                }
+            }
+
+            // 3. Dual New Run Button (460px wide, amber)
+            if (_apNewRunButton == null)
+            {
+                Transform existingNewRun = _apButtonsRoot.transform.Find("AP_NewRunButton");
+                if (existingNewRun != null)
+                {
+                    _apNewRunButton = existingNewRun.GetComponent<Button>();
+                }
+                else
+                {
+                    GameObject newRunGo = UnityEngine.Object.Instantiate(vanillaPlayButton.gameObject, _apButtonsRoot.transform);
+                    newRunGo.name = "AP_NewRunButton";
+                    _apNewRunButton = newRunGo.GetComponent<Button>();
+                    ConfigureApButton(newRunGo, "New Run", isAmber: true, rightX, vanillaSprite, btnWidth, btnHeight);
                 }
             }
         }
 
         public static void OnChangeDetails(LevelSelectScript __instance, int levelID)
         {
-            if (IsApSelected)
-            {
-                IsApSelected = false;
-                Button? playButton = Traverse.Create(__instance).Field("playButton").GetValue<Button>();
-                if (playButton != null)
-                {
-                    playButton.interactable = true;
-                    playButton.onClick = new Button.ButtonClickedEvent();
-                    playButton.onClick.AddListener(__instance.PlayLevel);
-
-                    TMP_Text? playText = playButton.GetComponentInChildren<TMP_Text>();
-                    if (playText != null)
-                    {
-                        playText.text = "Play";
-                    }
-                }
-            }
+            HideApButtons(__instance);
         }
     }
 
@@ -443,7 +885,7 @@ namespace WordPlayArchipelago.Patches
         [HarmonyPrefix]
         public static bool Prefix(LevelSelectScript __instance)
         {
-            if (TitleLevelSelectPatches.IsApSelected || ArchipelagoClient.IsArchipelagoRun)
+            if (TitleLevelSelectPatches.IsApSelected)
             {
                 Plugin.Logger.LogInfo($"[LevelSelectPlayLevelPatch] PlayLevel called for Archipelago! (Connected: {Plugin.Instance.Client.IsConnected})");
                 if (!Plugin.Instance.Client.IsConnected)
@@ -465,6 +907,18 @@ namespace WordPlayArchipelago.Patches
         }
     }
 
+    [HarmonyPatch(typeof(TitleScreenManager), "Start")]
+    public static class TitleScreenManagerStartPatch
+    {
+        [HarmonyPostfix]
+        public static void Postfix(TitleScreenManager __instance)
+        {
+            // Reset AP run state on Main Menu: Main menu resume button is strictly for normal games!
+            ArchipelagoClient.IsArchipelagoRun = false;
+            TitleLevelSelectPatches.SetApSelected(false);
+        }
+    }
+
     [HarmonyPatch(typeof(TitleScreenManager), nameof(TitleScreenManager.PlayGame), new Type[] { typeof(int) })]
     public static class TitleScreenPlayGamePatch
     {
@@ -472,6 +926,8 @@ namespace WordPlayArchipelago.Patches
         public static bool Prefix(int numberToPlay)
         {
             Plugin.Logger.LogInfo($"[TitleScreenPlayGamePatch] PlayGame called with rule #{numberToPlay} (IsApSelected: {TitleLevelSelectPatches.IsApSelected}, IsApRun: {ArchipelagoClient.IsArchipelagoRun}, Connected: {Plugin.Instance.Client.IsConnected})");
+
+            // Only intercept if AP is selected in LevelSelect, or explicitly launched as an AP run
             if (TitleLevelSelectPatches.IsApSelected || ArchipelagoClient.IsArchipelagoRun)
             {
                 if (!Plugin.Instance.Client.IsConnected)
@@ -480,6 +936,11 @@ namespace WordPlayArchipelago.Patches
                     return false; // Prevent launch!
                 }
                 ArchipelagoClient.IsArchipelagoRun = true;
+            }
+            else
+            {
+                // Normal game (including normal resume at numberToPlay == 0)
+                ArchipelagoClient.IsArchipelagoRun = false;
             }
             return true;
         }

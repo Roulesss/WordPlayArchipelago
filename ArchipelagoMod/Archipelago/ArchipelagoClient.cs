@@ -47,6 +47,12 @@ namespace WordPlayArchipelago.Archipelago
             return $"AP_LastItemIndex_{seed}_{SlotName}";
         }
 
+        private string GetCompletedWinsPrefKey()
+        {
+            string seed = !string.IsNullOrEmpty(SeedName) ? SeedName : "UnknownSeed";
+            return $"AP_CompletedWins_{seed}_{SlotName}";
+        }
+
         public bool IsLocationChecked(long locationId) => _checkedLocations.Contains(locationId);
 
         public event Action? OnConnectionStatusChanged;
@@ -67,12 +73,14 @@ namespace WordPlayArchipelago.Archipelago
         private readonly ConcurrentQueue<Action> _mainThreadQueue = new ConcurrentQueue<Action>();
         private readonly HashSet<long> _checkedLocations = new HashSet<long>();
 
+        private readonly HashSet<int> _processedItemIndices = new HashSet<int>();
+
         public ArchipelagoClient()
         {
             DeathLink = new DeathLinkHandler(this);
         }
 
-        public async void Connect(string host, int port, string slotName, string password)
+        public async void Connect(string host, int port, string slotName, string password, Action<bool, string?>? onComplete = null)
         {
             if (IsConnecting)
             {
@@ -205,23 +213,21 @@ namespace WordPlayArchipelago.Archipelago
                     LastProcessedItemIndex = PlayerPrefs.GetInt(prefKey, 0);
                     Plugin.Logger.LogInfo($"[ArchipelagoClient] Loaded LastProcessedItemIndex = {LastProcessedItemIndex} for {prefKey}");
 
+                    string winsPrefKey = GetCompletedWinsPrefKey();
+                    CompletedWins = PlayerPrefs.GetInt(winsPrefKey, 0);
+                    Plugin.Logger.LogInfo($"[ArchipelagoClient] Loaded CompletedWins = {CompletedWins}/{WinsRequired} from {winsPrefKey}");
+
                     ItemManager.ResetAllState();
                     _pendingGameItems.Clear();
+                    _processedItemIndices.Clear();
 
                     SlotNumber = successful.Slot;
 
                     // Listen for items
                     session.Items.ItemReceived += OnItemReceived;
 
-                    // Immediately process any items already in the queue from server
-                    while (session.Items.Any())
-                    {
-                        int itemIndex = session.Items.Index;
-                        ItemInfo initialItem = session.Items.DequeueItem();
-                        long itemId = initialItem.ItemId;
-                        string itemName = initialItem.ItemDisplayName;
-                        HandleIncomingItem(itemIndex, itemId, itemName);
-                    }
+                    // Immediately process all items received from server
+                    ProcessAllReceivedItems(session.Items);
 
                     // Re-sync any previously acquired locations
                     foreach (long loc in session.Locations.AllLocationsChecked)
@@ -260,6 +266,7 @@ namespace WordPlayArchipelago.Archipelago
                     }
 
                     OnConnectionStatusChanged?.Invoke();
+                    onComplete?.Invoke(true, null);
                 }
                 else if (result is LoginFailure failure)
                 {
@@ -267,6 +274,7 @@ namespace WordPlayArchipelago.Archipelago
                     LastError = string.Join("; ", failure.Errors);
                     Plugin.Logger.LogError($"[ArchipelagoClient] Failed to login to Archipelago: {LastError}");
                     OnConnectionStatusChanged?.Invoke();
+                    onComplete?.Invoke(false, LastError);
                 }
             }
             catch (Exception ex)
@@ -276,6 +284,7 @@ namespace WordPlayArchipelago.Archipelago
                 LastError = ex.Message;
                 Plugin.Logger.LogError($"[ArchipelagoClient] Exception during Archipelago connection: {ex.Message}");
                 OnConnectionStatusChanged?.Invoke();
+                onComplete?.Invoke(false, LastError);
             }
         }
 
@@ -338,7 +347,10 @@ namespace WordPlayArchipelago.Archipelago
         public void RecordRunWin()
         {
             CompletedWins++;
-            Plugin.Logger.LogInfo($"Run Won! Progress: {CompletedWins}/{WinsRequired} wins on {Difficulty.ToUpper()}.");
+            string winsPrefKey = GetCompletedWinsPrefKey();
+            PlayerPrefs.SetInt(winsPrefKey, CompletedWins);
+            PlayerPrefs.Save();
+            Plugin.Logger.LogInfo($"Run Won! Progress: {CompletedWins}/{WinsRequired} wins on {Difficulty.ToUpper()}. (Saved to {winsPrefKey})");
 
             if (CompletedWins >= WinsRequired)
             {
@@ -361,20 +373,29 @@ namespace WordPlayArchipelago.Archipelago
 
         private void OnItemReceived(ReceivedItemsHelper helper)
         {
-            Plugin.Logger.LogInfo($"[ArchipelagoClient] OnItemReceived callback triggered by server!");
-            while (helper.Any())
-            {
-                int itemIndex = helper.Index;
-                ItemInfo item = helper.DequeueItem();
-                long itemId = item.ItemId;
-                string itemName = item.ItemDisplayName;
+            Plugin.Logger.LogInfo($"[ArchipelagoClient] OnItemReceived callback triggered by server! Total items: {helper.AllItemsReceived.Count}");
+            ProcessAllReceivedItems(helper);
+        }
 
-                HandleIncomingItem(itemIndex, itemId, itemName);
+        private void ProcessAllReceivedItems(IReceivedItemsHelper helper)
+        {
+            var allItems = helper.AllItemsReceived;
+            for (int i = 0; i < allItems.Count; i++)
+            {
+                var item = allItems[i];
+                HandleIncomingItem(i, item.ItemId, item.ItemDisplayName);
             }
         }
 
         private void HandleIncomingItem(int itemIndex, long itemId, string itemName)
         {
+            if (_processedItemIndices.Contains(itemIndex))
+            {
+                Plugin.Logger.LogWarning($"[ArchipelagoClient] Duplicate itemIndex #{itemIndex} ('{itemName}') ignored!");
+                return;
+            }
+            _processedItemIndices.Add(itemIndex);
+
             Plugin.Logger.LogInfo($"[ArchipelagoClient] Incoming item: #{itemIndex} '{itemName}' (ID: {itemId}), LastProcessed={LastProcessedItemIndex}");
 
             if (itemIndex < LastProcessedItemIndex)
@@ -430,6 +451,11 @@ namespace WordPlayArchipelago.Archipelago
                 PlayerPrefs.Save();
                 Plugin.Logger.LogInfo($"[ArchipelagoClient] Saved LastProcessedItemIndex = {LastProcessedItemIndex}");
             }
+            try
+            {
+                SaveData.Instance?.Save();
+            }
+            catch { }
         }
 
         public void ProcessPendingGameItems()

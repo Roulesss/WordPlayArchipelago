@@ -14,6 +14,7 @@ namespace WordPlayArchipelago.Archipelago
         public static int ProgressiveWordLengthCount { get; set; } = 0;
         public static int UnlockedWordLength => Mathf.Clamp(StartingWordLength + ProgressiveWordLengthCount, 4, 20);
         public static int ExtraBoardSlotsReceived { get; set; } = 0;
+        public static int AppliedBoardSlots { get; set; } = 0;
         public static int PendingBonusPlays { get; set; } = 0;
         public static int PendingBonusRefreshes { get; set; } = 0;
 
@@ -27,6 +28,7 @@ namespace WordPlayArchipelago.Archipelago
         {
             ProgressiveWordLengthCount = 0;
             ExtraBoardSlotsReceived = 0;
+            AppliedBoardSlots = 0;
             PendingBonusPlays = 0;
             PendingBonusRefreshes = 0;
         }
@@ -287,12 +289,14 @@ namespace WordPlayArchipelago.Archipelago
         {
             if (ToolsScript.Instance != null && ExtraBoardSlotsReceived > 0)
             {
-                while (ToolsScript.Instance.permaSlots < ExtraBoardSlotsReceived &&
-                       ToolsScript.Instance.HowManyAvailableSlots() > 0)
+                while (AppliedBoardSlots < ExtraBoardSlotsReceived &&
+                       ToolsScript.Instance.HowManyAvailableSlots() > 0 &&
+                       (GridManagerScript.Instance == null || GridManagerScript.Instance.letterSpaces == null || GridManagerScript.Instance.letterSpaces.Count < 19))
                 {
-                    Plugin.Logger.LogInfo($"[ItemManager] Unlocking extra board slot: {ToolsScript.Instance.permaSlots + 1}/{ExtraBoardSlotsReceived}");
+                    Plugin.Logger.LogInfo($"[ItemManager] Unlocking extra board slot: {AppliedBoardSlots + 1}/{ExtraBoardSlotsReceived}");
                     ToolsScript.Instance.AddBonusTile();
                     ToolsScript.Instance.permaSlots++;
+                    AppliedBoardSlots++;
                 }
             }
         }

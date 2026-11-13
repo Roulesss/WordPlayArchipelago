@@ -34,7 +34,15 @@ namespace WordPlayArchipelago.Archipelago
             if (LogicManagerScript.Instance != null)
             {
                 LogicManagerScript.Instance.roundsToWin = Plugin.Instance.Client.TotalRoundsForDifficulty;
-                Plugin.Logger.LogInfo($"[ArchipelagoGameController] Configured game roundsToWin = {LogicManagerScript.Instance.roundsToWin}");
+                _lastTrackedRound = LogicManagerScript.Instance.currentRound;
+
+                // Pre-populate completed rounds for earlier rounds on resumed games so they don't re-trigger checks
+                for (int r = 1; r < LogicManagerScript.Instance.currentRound; r++)
+                {
+                    _completedRounds.Add(r);
+                }
+
+                Plugin.Logger.LogInfo($"[ArchipelagoGameController] Configured game roundsToWin = {LogicManagerScript.Instance.roundsToWin}, starting at round {_lastTrackedRound}");
 
                 if (ItemManager.PendingBonusPlays > 0)
                 {
@@ -132,7 +140,12 @@ namespace WordPlayArchipelago.Archipelago
         {
             if (LogicManagerScript.Instance == null) return;
 
+            // In endless mode or past total rounds for difficulty, do not process AP round checks
+            int maxRounds = Plugin.StaticClient?.TotalRoundsForDifficulty ?? 12;
+            if (LogicManagerScript.Instance.endlessMode) return;
+
             int currentRound = LogicManagerScript.Instance.currentRound;
+            if (currentRound > maxRounds) return;
 
             // Detect if round advanced
             if (currentRound > _lastTrackedRound)
@@ -140,7 +153,16 @@ namespace WordPlayArchipelago.Archipelago
                 int justCleared = _lastTrackedRound;
                 _lastTrackedRound = currentRound;
 
-                if (_completedRounds.Add(justCleared))
+                PlayerPrefs.SetInt("AP_InProgressRound", currentRound);
+                PlayerPrefs.Save();
+
+                try
+                {
+                    SaveData.Instance?.Save();
+                }
+                catch { }
+
+                if (justCleared <= maxRounds && _completedRounds.Add(justCleared))
                 {
                     TriggerRoundClearCheck(justCleared);
                 }
@@ -150,7 +172,7 @@ namespace WordPlayArchipelago.Archipelago
             if (ShopManager.Instance != null && ShopManager.Instance.shopScreen != null && ShopManager.Instance.shopScreen.activeSelf)
             {
                 // Shop is open! This also indicates currentRound was cleared!
-                if (_completedRounds.Add(currentRound))
+                if (currentRound <= maxRounds && _completedRounds.Add(currentRound))
                 {
                     TriggerRoundClearCheck(currentRound);
                 }
@@ -166,6 +188,9 @@ namespace WordPlayArchipelago.Archipelago
 
         private void TriggerRoundClearCheck(int round)
         {
+            int maxRounds = Plugin.StaticClient?.TotalRoundsForDifficulty ?? 12;
+            if (round > maxRounds) return;
+
             long locationId = LocationManager.GetRoundClearLocationId(round);
             string desc = $"Round {round} Clear";
 

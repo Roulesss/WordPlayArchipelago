@@ -84,6 +84,14 @@
       <HintPath>$(GameManagedDir)\DOTween.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="Coffee.UIEffect">
+      <HintPath>$(GameManagedDir)\Coffee.UIEffect.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.JSONSerializeModule">
+      <HintPath>$(GameManagedDir)\UnityEngine.JSONSerializeModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>

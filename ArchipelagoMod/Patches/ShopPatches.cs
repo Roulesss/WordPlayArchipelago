@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Archipelago.MultiClient.Net.Enums;
+using DG.Tweening;
 using HarmonyLib;
 using TMPro;
 using UnityEngine;
@@ -13,13 +14,39 @@ namespace WordPlayArchipelago.Patches
     public static class ShopCardBuyPatch
     {
         [HarmonyPrefix]
-        public static void Prefix(int cardID)
+        public static void Prefix(ShopManager __instance, int cardID)
         {
             var client = Plugin.StaticClient ?? Plugin.Instance?.Client;
             if (client == null || !client.IsConnected || !ArchipelagoClient.IsArchipelagoRun) return;
             if (LogicManagerScript.Instance == null) return;
+            if (LogicManagerScript.Instance.endlessMode) return;
+
+            // If player's modifier or upgrade inventory is full, notify them that the check is collected and the bonus discarded
+            if (__instance.upgradeCards != null && cardID >= 0 && cardID < __instance.upgradeCards.Count)
+            {
+                var card = __instance.upgradeCards[cardID];
+                if (card != null && card.associatedBonus != null && !UnlockManager.PlaceholderShopSlots.Contains(cardID))
+                {
+                    int ownedMods = BonusInventory.Instance != null ? BonusInventory.Instance.numberOfOwnedModifiers : 0;
+                    int maxMods = BonusInventory.Instance != null ? BonusInventory.Instance.maximumModifiers : 6;
+                    int ownedUpgrades = BonusInventory.Instance != null ? BonusInventory.Instance.numberOfOwnedUpgrades : 0;
+                    int maxUpgrades = BonusInventory.Instance != null ? BonusInventory.Instance.maximumUpgrades : 3;
+
+                    if (card.associatedBonus.BonusType == BaseBonus.Type.Modifier && ownedMods >= maxMods)
+                    {
+                        Plugin.Logger?.LogInfo($"[ShopCardBuyPatch] Modifiers full ({ownedMods}/{maxMods}): AP Check collected; modifier not added.");
+                        Plugin.Instance?.UI?.ShowBanner("Modifiers full (6/6): AP check collected (modifier discarded).", Color.cyan, 3.5f);
+                    }
+                    else if (card.associatedBonus.BonusType == BaseBonus.Type.Upgrade && ownedUpgrades >= maxUpgrades)
+                    {
+                        Plugin.Logger?.LogInfo($"[ShopCardBuyPatch] Upgrades full ({ownedUpgrades}/{maxUpgrades}): AP Check collected; upgrade not added.");
+                        Plugin.Instance?.UI?.ShowBanner("Letter upgrades full (3/3): AP check collected (upgrade discarded).", Color.cyan, 3.5f);
+                    }
+                }
+            }
 
             int round = LogicManagerScript.Instance.currentRound;
+            if (round >= client.TotalRoundsForDifficulty) return;
             long locationId = LocationManager.GetCurrentShopLocation(cardID);
             if (locationId <= 0)
             {
@@ -50,23 +77,22 @@ namespace WordPlayArchipelago.Patches
         [HarmonyPrefix]
         public static bool Prefix(ShopManager __instance)
         {
-            var client = Plugin.StaticClient ?? Plugin.Instance?.Client;
-            if (client != null && client.IsConnected && ArchipelagoClient.IsArchipelagoRun)
+            if (__instance.upgradeCards == null) return true;
+
+            int currentRound = LogicManagerScript.Instance != null ? LogicManagerScript.Instance.currentRound : 1;
+
+            for (int i = 0; i < __instance.numberOfShopItems && i < __instance.upgradeCards.Count; i++)
             {
-                // In Archipelago mode, shop cards represent location checks and should never be locked out
-                if (__instance.upgradeCards != null)
-                {
-                    for (int i = 0; i < __instance.numberOfShopItems && i < __instance.upgradeCards.Count; i++)
-                    {
-                        if (__instance.upgradeCards[i] != null)
-                        {
-                            __instance.upgradeCards[i].EnableCard(instant: true);
-                        }
-                    }
-                }
-                return false;
+                var card = __instance.upgradeCards[i];
+                if (card == null) continue;
+
+                // Always keep cards enabled so players can always get the AP check even if inventory is full
+                card.EnableCard(instant: true);
+
+                // Dynamically update card visuals and warnings based on current modifier/upgrade inventory count
+                ShopCardFormatter.FormatShopCard(card, i, currentRound);
             }
-            return true;
+            return false;
         }
     }
 
@@ -77,6 +103,54 @@ namespace WordPlayArchipelago.Patches
         public static bool Prefix(BonusStore __instance, bool reroll)
         {
             if (!ArchipelagoClient.IsArchipelagoRun) return true;
+
+            // If we have saved shop perks from a resume, restore them exactly instead of re-rolling!
+            if (!reroll && ShopSaveManager.HasSavedPerks)
+            {
+                Plugin.Logger?.LogInfo("[BonusStore] Restoring saved shop perks from resume save.");
+                __instance.nextThreeUpgrades.Clear();
+                UnlockManager.PlaceholderShopSlots.Clear();
+
+                if (__instance.everyBonus != null)
+                {
+                    var bonusLookup = new Dictionary<string, BaseBonus>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var b in __instance.everyBonus)
+                    {
+                        if (b != null && !bonusLookup.ContainsKey(b.name))
+                        {
+                            bonusLookup[b.name] = b;
+                        }
+                    }
+
+                    foreach (var perkName in ShopSaveManager.LoadedShopPerks)
+                    {
+                        if (bonusLookup.TryGetValue(perkName, out var b))
+                        {
+                            __instance.nextThreeUpgrades.Add(b);
+                        }
+                    }
+                }
+
+                LocationManager.RestoreShopLocations(ShopSaveManager.LoadedShopLocations);
+
+                foreach (var slot in ShopSaveManager.LoadedPlaceholderSlots)
+                {
+                    UnlockManager.PlaceholderShopSlots.Add(slot);
+                }
+
+                for (int i = 0; i < __instance.nextThreeUpgrades.Count; i++)
+                {
+                    var b = __instance.nextThreeUpgrades[i];
+                    if (b != null && !UnlockManager.PlaceholderShopSlots.Contains(i))
+                    {
+                        try { b.OnAppearInShop(); } catch { }
+                    }
+                }
+
+                ShopSaveManager.ClearLoadedPerks();
+                ShopSaveManager.RecordActiveShop();
+                return false;
+            }
 
             // Handle reroll tracking
             if (reroll)
@@ -233,7 +307,68 @@ namespace WordPlayArchipelago.Patches
             }
 
             Plugin.Logger?.LogInfo($"[BonusStore] Archipelago shop picked {__instance.nextThreeUpgrades.Count} items. Placeholders (Check Only): {UnlockManager.PlaceholderShopSlots.Count}");
+            ShopSaveManager.RecordActiveShop();
             return false;
+        }
+    }
+
+    [HarmonyPatch(typeof(ShopManager), nameof(ShopManager.ShowShop))]
+    public static class ShopShowShopPatch
+    {
+        [HarmonyPostfix]
+        public static void Postfix(ShopManager __instance)
+        {
+            if (!ArchipelagoClient.IsArchipelagoRun) return;
+
+            if (ShopSaveManager.LoadedRerollCost > 1)
+            {
+                Traverse.Create(__instance).Field("rerollCost").SetValue(ShopSaveManager.LoadedRerollCost);
+                __instance.reRollButtonText.text = "-" + ShopSaveManager.LoadedRerollCost + " Plays";
+            }
+
+            ShopSaveManager.RecordActiveShop();
+            try
+            {
+                SaveData.Instance?.Save();
+            }
+            catch (Exception ex)
+            {
+                Plugin.Logger?.LogWarning($"[ShopShowShopPatch] Save failed: {ex.Message}");
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(ShopManager), nameof(ShopManager.ReRollShop))]
+    public static class ShopReRollShopPatch
+    {
+        [HarmonyPostfix]
+        public static void Postfix()
+        {
+            if (!ArchipelagoClient.IsArchipelagoRun) return;
+
+            DOVirtual.DelayedCall(1.6f, () =>
+            {
+                ShopSaveManager.RecordActiveShop();
+                try
+                {
+                    SaveData.Instance?.Save();
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Logger?.LogWarning($"[ShopReRollShopPatch] Save failed: {ex.Message}");
+                }
+            });
+        }
+    }
+
+    [HarmonyPatch(typeof(ShopManager), nameof(ShopManager.ShutShop))]
+    public static class ShopShutShopPatch
+    {
+        [HarmonyPrefix]
+        public static void Prefix()
+        {
+            if (!ArchipelagoClient.IsArchipelagoRun) return;
+            ShopSaveManager.ClearShopState();
         }
     }
 
@@ -261,6 +396,7 @@ namespace WordPlayArchipelago.Patches
         {
             var client = Plugin.StaticClient ?? Plugin.Instance?.Client;
             if (card == null || client == null || !client.IsConnected || !ArchipelagoClient.IsArchipelagoRun) return;
+            if (round >= client.TotalRoundsForDifficulty || (LogicManagerScript.Instance != null && LogicManagerScript.Instance.endlessMode)) return;
 
             long locationId = LocationManager.GetCurrentShopLocation(cardIdx);
             if (locationId <= 0)
@@ -408,6 +544,14 @@ namespace WordPlayArchipelago.Patches
             else
             {
                 // Unlocked Bonus: keep normal vanilla bonus appearance + add AP Check info at bottom
+                int ownedMods = BonusInventory.Instance != null ? BonusInventory.Instance.numberOfOwnedModifiers : 0;
+                int maxMods = BonusInventory.Instance != null ? BonusInventory.Instance.maximumModifiers : 6;
+                int ownedUpgrades = BonusInventory.Instance != null ? BonusInventory.Instance.numberOfOwnedUpgrades : 0;
+                int maxUpgrades = BonusInventory.Instance != null ? BonusInventory.Instance.maximumUpgrades : 3;
+
+                bool isModFull = card.associatedBonus.BonusType == BaseBonus.Type.Modifier && ownedMods >= maxMods;
+                bool isUpgradeFull = card.associatedBonus.BonusType == BaseBonus.Type.Upgrade && ownedUpgrades >= maxUpgrades;
+
                 var headerField = Traverse.Create(card).Field("headerText").GetValue<TMP_Text>();
                 string vanillaHeader = card.associatedBonus.BonusType == BaseBonus.Type.Upgrade
                     ? "Upgrade"
@@ -415,7 +559,22 @@ namespace WordPlayArchipelago.Patches
 
                 if (headerField != null)
                 {
-                    headerField.text = isChecked ? $"[CHECKED] {vanillaHeader}" : $"[AP] {vanillaHeader}";
+                    if (isChecked)
+                    {
+                        headerField.text = $"[CHECKED] {vanillaHeader}";
+                    }
+                    else if (isModFull)
+                    {
+                        headerField.text = $"[AP] {vanillaHeader} <color=#FF4444>[FULL 6/6]</color>";
+                    }
+                    else if (isUpgradeFull)
+                    {
+                        headerField.text = $"[AP] {vanillaHeader} <color=#FF4444>[FULL 3/3]</color>";
+                    }
+                    else
+                    {
+                        headerField.text = $"[AP] {vanillaHeader}";
+                    }
                 }
 
                 var descField = Traverse.Create(card).Field("myDescription").GetValue<TMP_Text>();
@@ -461,8 +620,18 @@ namespace WordPlayArchipelago.Patches
                         apInfo = $"<b>AP Check #{cardIdx + 1}:</b> <color=#00FFFF>{locName}</color>";
                     }
 
+                    string warningText = "";
+                    if (isModFull)
+                    {
+                        warningText = "\n\n<color=#FF4444><b>MODIFIERS FULL (6/6)</b></color>";
+                    }
+                    else if (isUpgradeFull)
+                    {
+                        warningText = "\n\n<color=#FF4444><b>UPGRADES FULL (3/3)</b></color>";
+                    }
+
                     descField.margin = new Vector4(0f, 0f, 0f, 8f);
-                    descField.text = $"{vanillaDesc}\n\n<size=85%>{apInfo}</size>";
+                    descField.text = $"{vanillaDesc}\n\n<size=85%>{apInfo}</size>{warningText}";
                 }
 
                 var rarityField = Traverse.Create(card).Field("rarityText").GetValue<TMP_Text>();
